@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "sshPublicKey": {
+      "value": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC8mnr/N9IV0lwj9pzHVtT+pleL4c6dshhiGavZROsqRzJscEfGwu55rXm/sFm6LQgZHa855k3VmMjhno7UZIihyUxqyBr7v2NHkfKNyIkfqABG01KnGcaFcMYYtn46cqZ+ulsNocl4sJsL5wGhrdknfr0NGWXajtXHwVdo+822CFc/Ig9uelbccF2UV3nFen0Egu/NQHweH1e+ID/d5s8NL6F5L0PCd0uSTXnDRzAGw50+KmfJ5zNGEjsM3r55uy/iwRp3fC12pPhOMysyO2zh7+SJWcqZl9THDIK0XXB8GzUj1WReQk9/0l7goGchi73kKZ8zf4JdrqVfKafi6vcA6juKr/UvyeXoftB7Fcx8X52mRnDw51VvOBmmwnPxSXd1s6MWLd1SUqrEgVsPexnNsPv4Brw0EWoCS+NZe1ZhTZ6c+rZ0GCesejPafmPfitf7VMLbeK93LuhaxiOoxld9BouuXShhjVDzzY/cCGvbh+HNSAFxb+1VgqNPAcRf4+rAdo9KVZQtVtsLTMoACSNCerdSBJR9S71dgFqHkQYxkUjwEvnI+fPTKLUhhgWvHao7qSYdMmahe86sVXIRI4tkeX2/ktDebQr4uRumhmi/BURg+VozeLjtO2lpZy5siAyPytiM4fHBahxCPhUuYu9YiWyDxbd0vBOfOkBPfP6ojQ== wireguard-vm"
+    }
+  }
+}

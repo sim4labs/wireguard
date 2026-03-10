@@ -1,0 +1,5 @@
+# Client configs contain private keys
+client-configs/
+
+# macOS
+.DS_Store
