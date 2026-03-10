@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(az account show:*)",
+      "Bash(az group:*)",
+      "Bash(az network vnet create:*)",
+      "Bash(az network nsg rule create:*)",
+      "Bash(az cost-management:*)",
+      "Bash(az logout:*)",
+      "Bash(az login:*)",
+      "Bash(az account:*)",
+      "Bash(az consumption:*)",
+      "Bash(az resource:*)",
+      "Bash(az rest:*)",
+      "Bash(git init:*)",
+      "Bash(git branch:*)",
+      "Bash(gh repo:*)",
+      "Bash(git remote:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
