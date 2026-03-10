@@ -17,22 +17,27 @@ write_files:
     content: |
       #!/bin/bash
       set -e
-      
+
+      # Configurable counts
+      NUM_DEVICES=${NUM_DEVICES:-2}
+      NUM_SERVERS=${NUM_SERVERS:-3}
+
       echo "Setting up WireGuard server..."
-      
+      echo "Devices: ${NUM_DEVICES}, Home servers: ${NUM_SERVERS}"
+
       # Create WireGuard directory
       mkdir -p /etc/wireguard
       cd /etc/wireguard
-      
+
       # Generate server keys
       wg genkey | tee server_private.key | wg pubkey > server_public.key
       chmod 600 server_private.key
-      
+
       # Get server keys
       SERVER_PRIVATE_KEY=$(cat server_private.key)
       SERVER_PUBLIC_KEY=$(cat server_public.key)
-      
-      # Create server config
+
+      # Create server config (interface section)
       cat > /etc/wireguard/wg0.conf <<EOF
       [Interface]
       Address = 10.100.0.1/24
@@ -40,59 +45,112 @@ write_files:
       PrivateKey = ${SERVER_PRIVATE_KEY}
       PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
       PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-      
+
       EOF
-      
-      # Generate 5 client configs
+
+      # Prepare client config directory
       mkdir -p /root/wireguard-clients
       SERVER_PUBLIC_IP=$(curl -s ifconfig.me)
-      
-      for i in {1..5}; do
+
+      # --- Device peers (10.100.0.2 .. 10.100.0.{1+NUM_DEVICES}) ---
+      for i in $(seq 1 $NUM_DEVICES); do
         CLIENT_PRIVATE_KEY=$(wg genkey)
         CLIENT_PUBLIC_KEY=$(echo $CLIENT_PRIVATE_KEY | wg pubkey)
-        CLIENT_IP="10.100.0.$((i+1))/32"
-        
-        # Add peer to server config
+        CLIENT_IP="10.100.0.$((i+1))"
+
+        # Add peer to server config (same entry for both profiles)
         cat >> /etc/wireguard/wg0.conf <<EOF
-      
+
       [Peer]
-      # Client ${i}
+      # Device ${i}
       PublicKey = ${CLIENT_PUBLIC_KEY}
-      AllowedIPs = ${CLIENT_IP}
+      AllowedIPs = ${CLIENT_IP}/32
       EOF
-        
-        # Create client config
-        cat > /root/wireguard-clients/client${i}.conf <<EOF
+
+        # VPN profile — full tunnel, all traffic through Azure
+        cat > /root/wireguard-clients/device${i}-vpn.conf <<EOF
       [Interface]
       PrivateKey = ${CLIENT_PRIVATE_KEY}
-      Address = ${CLIENT_IP}
+      Address = ${CLIENT_IP}/32
       DNS = 1.1.1.1, 1.0.0.1
-      
+
       [Peer]
       PublicKey = ${SERVER_PUBLIC_KEY}
       Endpoint = ${SERVER_PUBLIC_IP}:51820
       AllowedIPs = 0.0.0.0/0, ::/0
       PersistentKeepalive = 25
       EOF
-        
-        # Generate QR code
-        qrencode -t ansiutf8 < /root/wireguard-clients/client${i}.conf > /root/wireguard-clients/client${i}.qr
-        
-        echo "Client ${i} configuration created"
+
+        # Home profile — split tunnel, only WireGuard subnet
+        cat > /root/wireguard-clients/device${i}-home.conf <<EOF
+      [Interface]
+      PrivateKey = ${CLIENT_PRIVATE_KEY}
+      Address = ${CLIENT_IP}/32
+      DNS = 1.1.1.1, 1.0.0.1
+
+      [Peer]
+      PublicKey = ${SERVER_PUBLIC_KEY}
+      Endpoint = ${SERVER_PUBLIC_IP}:51820
+      AllowedIPs = 10.100.0.0/24
+      PersistentKeepalive = 25
+      EOF
+
+        # Generate QR codes for both profiles
+        qrencode -t ansiutf8 < /root/wireguard-clients/device${i}-vpn.conf > /root/wireguard-clients/device${i}-vpn.qr
+        qrencode -t ansiutf8 < /root/wireguard-clients/device${i}-home.conf > /root/wireguard-clients/device${i}-home.qr
+
+        echo "Device ${i} configs created (vpn + home profiles)"
       done
-      
+
+      # --- Home server peers (10.100.0.{2+NUM_DEVICES} .. ) ---
+      SERVER_OFFSET=$((NUM_DEVICES + 2))
+      for i in $(seq 1 $NUM_SERVERS); do
+        CLIENT_PRIVATE_KEY=$(wg genkey)
+        CLIENT_PUBLIC_KEY=$(echo $CLIENT_PRIVATE_KEY | wg pubkey)
+        CLIENT_IP="10.100.0.$((SERVER_OFFSET + i - 1))"
+
+        # Add peer to server config
+        cat >> /etc/wireguard/wg0.conf <<EOF
+
+      [Peer]
+      # Home Server ${i}
+      PublicKey = ${CLIENT_PUBLIC_KEY}
+      AllowedIPs = ${CLIENT_IP}/32
+      EOF
+
+        # Home server config — split tunnel, only WireGuard subnet
+        cat > /root/wireguard-clients/server${i}.conf <<EOF
+      [Interface]
+      PrivateKey = ${CLIENT_PRIVATE_KEY}
+      Address = ${CLIENT_IP}/32
+
+      [Peer]
+      PublicKey = ${SERVER_PUBLIC_KEY}
+      Endpoint = ${SERVER_PUBLIC_IP}:51820
+      AllowedIPs = 10.100.0.0/24
+      PersistentKeepalive = 25
+      EOF
+
+        # Generate QR code
+        qrencode -t ansiutf8 < /root/wireguard-clients/server${i}.conf > /root/wireguard-clients/server${i}.qr
+
+        echo "Home server ${i} config created"
+      done
+
       # Set permissions
       chmod 600 /etc/wireguard/wg0.conf
       chmod 600 /root/wireguard-clients/*.conf
-      
+
       # Enable and start WireGuard
       systemctl enable wg-quick@wg0
       systemctl start wg-quick@wg0
-      
+
       echo "WireGuard setup complete!"
       echo "Server Public Key: ${SERVER_PUBLIC_KEY}"
       echo "Server Public IP: ${SERVER_PUBLIC_IP}"
-      echo "Client configs available in /root/wireguard-clients/"
+      echo ""
+      echo "Generated configs in /root/wireguard-clients/:"
+      ls -1 /root/wireguard-clients/*.conf
 
 runcmd:
   - sysctl -p /etc/sysctl.d/99-wireguard.conf
