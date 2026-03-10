@@ -17,7 +17,12 @@
       "Bash(gh repo:*)",
       "Bash(git remote:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(chmod +x /Users/sim4rair/labs/wireguard/scripts/setup-home-server.sh)",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\('/Users/sim4rair/labs/wireguard/scripts/cloud-init.yaml'\\)\\); print\\('YAML is valid'\\)\")",
+      "Bash(az vm:*)",
+      "Bash(az deployment:*)"
     ],
     "deny": [],
     "ask": []
