@@ -1,87 +1,67 @@
 # WireGuard on Azure Setup
 
 ## Project Overview
-Setting up a WireGuard VPN server on Azure using Bicep templates and Azure CLI for personal use across multiple devices (phones, computers, iPads) with two connection profiles:
-- **VPN profile** — full tunnel, all traffic routed through Azure for privacy/security
-- **Home profile** — split tunnel, only WireGuard subnet traffic, to reach home servers via their WireGuard IPs
+WireGuard VPN server on Azure (Bicep + cloud-init). Single-purpose: full-tunnel VPN — every client routes all traffic (`0.0.0.0/0, ::/0`) through the Azure VM for privacy on public WiFi, geo-shifting, etc.
 
 ## Prerequisites
-- Azure subscription with $200 credits
-- Azure CLI installed locally
-- Bicep CLI installed (comes with Azure CLI v2.20.0+)
+- Azure subscription
+- Azure CLI installed locally (Bicep CLI ships with it)
 
 ## Architecture
-- Single Ubuntu VM running WireGuard (hub)
-- Public IP for VPN access
-- Network Security Group (NSG) with WireGuard port (51820/UDP)
-- Devices connect with either VPN or Home profile (one at a time)
-- Home servers maintain always-on WireGuard connections to the hub
+- Single Ubuntu 22.04 VM (Standard_B1s) running WireGuard
+- Static Public IP, NSG allows UDP 51820 + TCP 22
+- Each device has its own peer + private config file (one device per profile)
 
 ### IP Allocation
 
-| Peer | IP | Type |
-|---|---|---|
-| Azure VM (hub) | 10.100.0.1 | Server |
-| Device 1 | 10.100.0.2 | Device (2 profiles) |
-| Device 2 | 10.100.0.3 | Device (2 profiles) |
-| Home Server 1 | 10.100.0.4 | Always-on server |
-| Home Server 2 | 10.100.0.5 | Always-on server |
-| Home Server 3 | 10.100.0.6 | Always-on server |
+| Peer | IP |
+|---|---|
+| Azure VM (server) | 10.100.0.1 |
+| ipad-pro | 10.100.0.2 |
+| ipad-air | 10.100.0.3 |
+| iphone | 10.100.0.4 |
+| studio | 10.100.0.5 |
+| macair | 10.100.0.6 |
+| macpro | 10.100.0.7 |
+
+To add/remove devices, edit `DEVICES` in `scripts/cloud-init.yaml` and redeploy (or generate new peers manually on the running VM).
+
+## Performance Tuning (baked into cloud-init)
+- **BBR** congestion control + `fq` qdisc — material gain on RTT > 30 ms
+- **64 MB TCP send/receive buffers** — saturates BDP on long-distance flows
+- **TCP MSS clamping** on `wg0` forward path — prevents path-MTU black holes
+- **MTU 1380** on client side — avoids fragmentation under typical IPv6/cellular
+- **TCP Fast Open + MTU probing** enabled
+
+Real-world throughput from Seattle → westus2 with these tunings on a 1 Gbps home link:
+- Cloudflare / nearby CDNs: 200-300 Mbps single-stream
+- Distant single-stream (Hetzner Ashburn): ~50 Mbps (TCP/RTT physics, not the VPN)
+- Multi-stream tools (`aria2c -x 16`) saturate the link for large downloads
 
 ## Resource Estimates (Monthly)
-- B1s VM (1 vCPU, 1 GB RAM): ~$7.60/month
-- Public IP: ~$3.65/month
-- Storage: ~$0.10/month
-- Total: ~$11.35/month (should last ~17 months with $200 credits)
+- B1s VM: ~$7.60
+- Public IP: ~$3.65
+- Storage: ~$0.10
+- **Total: ~$11.35/month**
+
+CPU on B1s is *not* the bottleneck for one user — load average stays near 0 even at 300 Mbps. Don't upgrade unless you have many concurrent users.
 
 ## Directory Structure
 ```
 wireguard/
-├── CLAUDE.md                # This file
-├── main.bicep               # Bicep deployment template
-├── parameters.json          # Deployment parameters
+├── CLAUDE.md
+├── main.bicep                # Bicep deployment template
+├── parameters.json           # SSH public key parameter
 ├── scripts/
-│   ├── cloud-init.yaml      # Cloud-init config (generates all WireGuard configs on VM)
-│   └── setup-home-server.sh # Script to set up WireGuard on home servers
-└── client-configs/          # Downloaded client configurations
+│   └── cloud-init.yaml       # VM bootstrap (installs WG, generates configs, applies tuning)
+└── client-configs/           # (gitignored) downloaded client .conf files — contain private keys
 ```
 
-## Generated Config Files (on Azure VM)
+## Deployment
 
-After deployment, the VM generates 7 configs in `/root/wireguard-clients/`:
-
-| File | Purpose | AllowedIPs |
-|---|---|---|
-| `device1-vpn.conf` | Device 1 full tunnel | `0.0.0.0/0, ::/0` |
-| `device1-home.conf` | Device 1 home access | `10.100.0.0/24` |
-| `device2-vpn.conf` | Device 2 full tunnel | `0.0.0.0/0, ::/0` |
-| `device2-home.conf` | Device 2 home access | `10.100.0.0/24` |
-| `server1.conf` | Home Server 1 | `10.100.0.0/24` |
-| `server2.conf` | Home Server 2 | `10.100.0.0/24` |
-| `server3.conf` | Home Server 3 | `10.100.0.0/24` |
-
-Device VPN and Home profiles share the same key pair and IP. Only one profile is active at a time per device.
-
-## Deployment Steps
-1. Login to Azure
-2. Create resource group
-3. Deploy Bicep template
-4. SSH into VM and retrieve config files
-5. Set up home servers
-6. Import profiles on devices
-
-## Azure CLI Commands
 ```bash
-# Login
 az login
-
-# Set subscription (if multiple)
-az account set --subscription "YOUR_SUBSCRIPTION_ID"
-
-# Create resource group
-az group create --name rg-wireguard --location eastus
-
-# Deploy Bicep template
+az group create --name rg-wireguard --location westus2
 az deployment group create \
   --resource-group rg-wireguard \
   --template-file main.bicep \
@@ -90,57 +70,68 @@ az deployment group create \
 # Get VM public IP
 az vm show -d -g rg-wireguard -n vm-wireguard --query publicIps -o tsv
 
-# SSH into VM and copy configs
-scp azureuser@<VM_IP>:/root/wireguard-clients/*.conf ./client-configs/
+# Pull all client configs locally
+mkdir -p client-configs
+scp 'azureuser@<VM_IP>:/root/wireguard-clients/*.conf' ./client-configs/
 ```
 
-## Using the Two Profiles on Devices
+> Note: the VM's `cloud-init.yaml` writes configs to `/root/...`, which requires SSH'ing as root or using `sudo cat` / `az vm run-command` to retrieve. For ad-hoc retrieval the cleanest is:
+> ```
+> az vm run-command invoke -g rg-wireguard -n vm-wireguard \
+>   --command-id RunShellScript --scripts "cat /root/wireguard-clients/macair.conf"
+> ```
 
-Import both `deviceN-vpn.conf` and `deviceN-home.conf` into the WireGuard app on your device. Only activate one at a time:
+## Adding a Device on a Running VM (no redeploy)
 
-- **VPN profile** (`deviceN-vpn.conf`): Use when you want all internet traffic encrypted through Azure (public WiFi, privacy).
-- **Home profile** (`deviceN-home.conf`): Use when you want to SSH into home servers via their WireGuard IPs (e.g., `ssh user@10.100.0.4`). Regular internet traffic goes through your normal connection.
+```bash
+NAME=newdevice
+SUFFIX=8   # next free 10.100.0.X
+az vm run-command invoke -g rg-wireguard -n vm-wireguard --command-id RunShellScript --scripts "
+  cd /etc/wireguard
+  K=\$(wg genkey); P=\$(echo \$K | wg pubkey)
+  IP=10.100.0.${SUFFIX}
+  echo -e '\n[Peer]\n# ${NAME}\nPublicKey = '\$P'\nAllowedIPs = '\$IP'/32' >> wg0.conf
+  cat > /root/wireguard-clients/${NAME}.conf <<EOF
+[Interface]
+PrivateKey = \$K
+Address = \$IP/32
+DNS = 1.1.1.1, 1.0.0.1
+MTU = 1380
 
-## Setting Up Home Servers
+[Peer]
+PublicKey = \$(cat server_public.key)
+Endpoint = \$(curl -s ifconfig.me):51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+  TMP=\$(mktemp); wg-quick strip wg0 > \$TMP; wg syncconf wg0 \$TMP; rm \$TMP
+  cat /root/wireguard-clients/${NAME}.conf
+"
+```
 
-1. Copy the server config to the home server:
-   ```bash
-   scp server1.conf user@home-server-1:~/
-   ```
+`wg syncconf` reloads peers without disconnecting active clients.
 
-2. Run the setup script on the home server:
-   ```bash
-   sudo ./setup-home-server.sh server1.conf
-   ```
+## Importing Profiles
 
-   This installs WireGuard, copies the config, and enables the service to start on boot.
+- **iOS / iPadOS**: `qrencode -t ansiutf8 < client-configs/iphone.conf` and scan with WireGuard app (`+` → "Create from QR code")
+- **macOS**: WireGuard.app → `File → Import Tunnel(s) from File…`
+- **Linux**: `sudo cp foo.conf /etc/wireguard/wg0.conf && sudo systemctl enable --now wg-quick@wg0`
 
-3. Verify the connection:
-   ```bash
-   sudo wg show
-   ping 10.100.0.1  # ping the Azure hub
-   ```
+⚠️ Each `.conf` carries a unique private key — do **not** import the same file on two devices simultaneously, they'll fight over the IP and kick each other.
 
-Repeat for each home server with its respective config file.
-
-## Security Considerations
-- Use strong keys for WireGuard (auto-generated)
-- Limit NSG rules to only WireGuard port
-- Regular OS updates on VM
-- Backup private keys securely
-- Home server configs use split tunnel (no internet traffic through Azure)
+## Security
+- Private keys live in `client-configs/` (gitignored)
+- Server private key lives only on the VM (`/etc/wireguard/server_private.key`, mode 600)
+- NSG allows only UDP 51820 + TCP 22 from anywhere — consider restricting SSH source IP for hardening
+- Public key auth only on VM (password auth disabled in Bicep)
 
 ## Monitoring
-- Azure Monitor for VM metrics
-- `sudo wg show` on the VM to see connected peers
-- `systemctl status wg-quick@wg0` to check service status
-
-## Cost Optimization Tips
-- Use B-series burstable VMs
-- Stop VM when not needed for extended periods
-- Consider Spot instances for non-critical usage
+```bash
+az vm run-command invoke -g rg-wireguard -n vm-wireguard --command-id RunShellScript --scripts "wg show"
+```
+Look for `latest handshake` per peer — if missing, that client never connected (or its config is stale).
 
 ## Useful Links
-- [WireGuard Documentation](https://www.wireguard.com/quickstart/)
-- [Azure Bicep Documentation](https://docs.microsoft.com/en-us/azure/azure-resource-manager/bicep/)
-- [Azure CLI Reference](https://docs.microsoft.com/en-us/cli/azure/)
+- [WireGuard Quickstart](https://www.wireguard.com/quickstart/)
+- [Azure Bicep docs](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
+- [BBR background](https://research.google/pubs/bbr-congestion-based-congestion-control/)
